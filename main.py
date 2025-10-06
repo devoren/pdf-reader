@@ -12,7 +12,7 @@ async def extract_text(
 ):
     """
     Извлекает текст из PDF.
-    Если pages не передан — обрабатываются все страницы.
+    Если pages не передан — обрабатываются максимум 7 страниц.
     Пример pages: "1-7" или "2,5,6"
     """
     try:
@@ -23,18 +23,21 @@ async def extract_text(
 
         # Разбор параметра pages (если указан)
         page_numbers = None
-        if pages:
-            if "-" in pages:
-                start, end = map(int, pages.split("-"))
-                page_numbers = list(range(start, end + 1))
-            else:
-                page_numbers = [int(p.strip()) for p in pages.split(",") if p.strip().isdigit()]
-
-        result_text = []
         with pdfplumber.open(tmp_path) as pdf:
             total_pages = len(pdf.pages)
+
+            if pages:
+                if "-" in pages:
+                    start, end = map(int, pages.split("-"))
+                    page_numbers = list(range(start, end + 1))
+                else:
+                    page_numbers = [int(p.strip()) for p in pages.split(",") if p.strip().isdigit()]
+            else:
+                page_numbers = list(range(1, min(7, total_pages) + 1))
+
+            result_text = []
             for i, page in enumerate(pdf.pages, start=1):
-                if not page_numbers or i in page_numbers:
+                if i in page_numbers:
                     text = page.extract_text() or ""
                     result_text.append(f"\n=== Страница {i} ===\n{text}")
 
