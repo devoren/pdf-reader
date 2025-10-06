@@ -12,7 +12,7 @@ async def extract_text(
 ):
     """
     Извлекает текст из PDF.
-    Если pages не передан — обрабатываются максимум 7 страниц.
+    Если pages не передан — обрабатываются максимум 6 страниц.
     Пример pages: "1-7" или "2,5,6"
     """
     try:
@@ -33,7 +33,7 @@ async def extract_text(
                 else:
                     page_numbers = [int(p.strip()) for p in pages.split(",") if p.strip().isdigit()]
             else:
-                page_numbers = list(range(1, min(7, total_pages) + 1))
+                page_numbers = list(range(1, min(6, total_pages) + 1))
 
             result_text = []
             for i, page in enumerate(pdf.pages, start=1):
