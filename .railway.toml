@@ -1,7 +1,0 @@
-[build]
-builder = "NIXPACKS"
-[build.env]
-PYTHON_VERSION = "3.11"
-
-[start]
-cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"
