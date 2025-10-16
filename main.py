@@ -11,9 +11,17 @@ async def extract_text(
     pages: str = Form(None)  # pages можно не передавать
 ):
     """
-    Извлекает текст из PDF.
-    Если pages не передан — обрабатываются максимум 6 страниц.
-    Пример pages: "1-7" или "2,5,6"
+    Извлекает текст из загруженного PDF-файла.
+
+    Параметры:
+    - file: PDF-файл, из которого нужно получить текст.
+    - pages (необязательно): укажите, какие страницы нужно обработать.
+        • Можно указать диапазон — например, "1-5"
+        • Можно список — например, "1,3,7"
+        • Можно "all" — чтобы извлечь текст со всех страниц.
+        • Если параметр не указан, обрабатываются первые 6 страниц.
+
+    Возвращает JSON с полным текстом, количеством страниц и другой информацией.
     """
     try:
         # Временное сохранение файла
@@ -27,11 +35,21 @@ async def extract_text(
             total_pages = len(pdf.pages)
 
             if pages:
-                if "-" in pages:
-                    start, end = map(int, pages.split("-"))
-                    page_numbers = list(range(start, end + 1))
+                pages_clean = pages.strip().lower()
+                if pages_clean == "all":
+                    page_numbers = list(range(1, total_pages + 1))
+                elif "-" in pages_clean:
+                    start, end = map(int, pages_clean.split("-"))
+                    page_numbers = list(range(start, min(end, total_pages) + 1))
+                elif pages_clean.isdigit():
+                    end = int(pages_clean)
+                    page_numbers = list(range(1, min(end, total_pages) + 1))
                 else:
-                    page_numbers = [int(p.strip()) for p in pages.split(",") if p.strip().isdigit()]
+                    page_numbers = [
+                        int(p.strip())
+                        for p in pages_clean.split(",")
+                        if p.strip().isdigit() and 1 <= int(p.strip()) <= total_pages
+                    ]
             else:
                 page_numbers = list(range(1, min(6, total_pages) + 1))
 
