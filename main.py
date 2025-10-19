@@ -4,29 +4,9 @@ import pdfplumber
 import tempfile
 import camelot
 import PyPDF2
-
-def clean_camelot_csv(raw_csv: str):
-    import csv, io
-    reader = csv.reader(io.StringIO(raw_csv))
-    rows = [r for r in reader if any(cell.strip() for cell in r)]
-    if rows and all(c.isdigit() or c == '' for c in rows[0]):
-        rows = rows[1:]
-    cleaned = []
-    buffer = []
-    for row in rows:
-        if row[0].strip():
-            if buffer:
-                cleaned.append(buffer)
-                buffer = []
-            buffer = row
-        else:
-            buffer = [a + " " + b if b else a for a, b in zip(buffer, row)]
-    if buffer:
-        cleaned.append(buffer)
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerows(cleaned)
-    return output.getvalue()
+import shutil
+import os
+import base64
 
 def parse_pages_param(pages_str, total_pages):
     if pages_str:
@@ -53,23 +33,18 @@ app = FastAPI(title="PDF Extractor API", version="1.2")
 @app.post("/extract")
 async def extract_text(
     file: UploadFile = File(...),
-    pages: str = Form(None),  # pages можно не передавать
-    options: str = Form("plumber")
+    pages: str = Form(None)  # pages можно не передавать
 ):
     """
-    Извлекает текст из загруженного PDF-файла.
+    Извлекает текст из загруженного PDF-файла с помощью pdfplumber.
 
     Параметры:
-    - file: PDF-файл, из которого нужно получить текст.
-    - pages (необязательно): укажите, какие страницы нужно обработать.
-        • Можно указать диапазон — например, "1-5"
-        • Можно список — например, "1,3,7"
-        • Можно "all" — чтобы извлечь текст со всех страниц.
-        • Если параметр не указан, обрабатываются первые 6 страниц.
-      Параметр pages работает одинаково для обоих движков.
-    - options: движок для извлечения текста ("plumber", "camelot").
+    - file: PDF-файл для обработки.
+    - pages (необязательно): страницы для обработки.
+      Можно указать диапазон ("1-5"), список ("1,3,7") или "all".
+      Если не указан, обрабатываются первые 6 страниц.
 
-    Возвращает JSON с полным текстом, количеством страниц, используемым движком и другой информацией.
+    Возвращает JSON с извлечённым текстом и информацией о файле.
     """
     try:
         # Временное сохранение файла
@@ -77,76 +52,27 @@ async def extract_text(
             tmp.write(await file.read())
             tmp_path = tmp.name
 
-        engine_used = None
         result_text = []
         total_pages = 0
-        pages_processed = 0
 
-        if options == "camelot":
-            # Определяем количество страниц PDF
-            with open(tmp_path, "rb") as f:
-                reader = PyPDF2.PdfReader(f)
-                total_pages = len(reader.pages)
-
-            # Преобразуем список страниц в строку для Camelot
+        with pdfplumber.open(tmp_path) as pdf:
+            total_pages = len(pdf.pages)
             page_numbers = parse_pages_param(pages, total_pages)
-            pages_str = ",".join(map(str, page_numbers))
+            for i, page in enumerate(pdf.pages, start=1):
+                if i in page_numbers:
+                    text = page.extract_text() or ""
+                    result_text.append(f"\n=== Страница {i} ===\n{text}")
 
-            # Используем camelot для извлечения таблиц
-            tables = camelot.read_pdf(tmp_path, flavor="stream", pages=pages_str)
-            if tables:
-                import pandas as pd
-                header_row = None  # Для хранения заголовков таблицы
-                for idx, table in enumerate(tables):
-                    df = table.df.copy()
-                    flat_text = " ".join(df.astype(str).values.flatten()).lower()
-
-                    # 📄 Если первая таблица содержит служебную шапку — запоминаем её, но не добавляем в результат
-                    if idx == 0 and any(k in flat_text for k in ["выписка", "остаток", "владелец", "счет №"]):
-                        header_row = df.iloc[-1].tolist() if len(df) > 1 else df.iloc[0].tolist()
-                        continue
-
-                    # 🧩 Добавляем заголовок, если он отсутствует
-                    if header_row is not None and list(df.iloc[0]) != header_row:
-                        n_cols = df.shape[1]
-                        hdr = header_row[:n_cols] if len(header_row) > n_cols else header_row + [''] * (n_cols - len(header_row))
-                        import pandas as pd
-                        header_df = pd.DataFrame([hdr], columns=df.columns)
-                        df = pd.concat([header_df, df], ignore_index=True)
-
-                    csv_text = clean_camelot_csv(df.to_csv(index=False))
-                    result_text.append(f"=== Страница {table.page} ===\n{csv_text}")
-                unique_pages = {t.page for t in tables}
-                pages_processed = len(unique_pages)
-            else:
-                pages_processed = 0
-            engine_used = "camelot"
-
-        elif options == "plumber":
-            with pdfplumber.open(tmp_path) as pdf:
-                total_pages = len(pdf.pages)
-                page_numbers = parse_pages_param(pages, total_pages)
-                for i, page in enumerate(pdf.pages, start=1):
-                    if i in page_numbers:
-                        text = page.extract_text() or ""
-                        result_text.append(f"\n=== Страница {i} ===\n{text}")
-                pages_processed = len(result_text)
-            engine_used = "pdfplumber"
-
-        else:
-            return JSONResponse(
-                {"status": "error", "message": f"Unsupported option '{options}'. Use 'plumber' or 'camelot'."},
-                status_code=400
-            )
+        os.unlink(tmp_path)
 
         return JSONResponse({
             "status": "ok",
             "file_name": file.filename,
             "total_pages": total_pages,
-            "pages_processed": pages_processed,
+            "pages_processed": len(result_text),
             "text_length": sum(len(t) for t in result_text),
             "text": "\n".join(result_text),
-            "engine_used": engine_used
+            "engine_used": "pdfplumber"
         })
 
     except Exception as e:
@@ -154,3 +80,74 @@ async def extract_text(
             {"status": "error", "message": str(e)},
             status_code=500
         )
+
+@app.post("/convert-to-excel")
+async def convert_to_excel(file: UploadFile = File(...)):
+    """
+    Конвертирует PDF в Excel (.xlsx) с помощью Camelot.
+    Возвращает JSON с Excel в base64 (удобно для n8n).
+    """
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+            tmp_pdf.write(await file.read())
+            pdf_path = tmp_pdf.name
+
+        # === Извлекаем метаданные (до первой строки с заголовками) ===
+        metadata_lines = []
+        header_keywords = ["КНП", "Дебет", "Кредит", "Назначение", "БИК", "Номер документа"]
+        with pdfplumber.open(pdf_path) as pdf:
+            if len(pdf.pages) > 0:
+                lines = (pdf.pages[0].extract_text() or "").splitlines()
+                for line in lines:
+                    if any(key in line for key in header_keywords):
+                        break
+                    metadata_lines.append(line)
+
+        # === Camelot extraction ===
+        tables = camelot.read_pdf(pdf_path, flavor="lattice", pages="all")
+
+        if not tables or len(tables) == 0:
+            os.unlink(pdf_path)
+            return JSONResponse({"status": "error", "message": "No tables found."}, status_code=400)
+
+        import pandas as pd
+        all_dfs = []
+        for idx, table in enumerate(tables):
+            df = table.df
+            if idx == 0:
+                all_dfs.append(df)
+            else:
+                # Пропускаем строки заголовков для последующих таблиц
+                all_dfs.append(df.iloc[1:].reset_index(drop=True))
+        combined_df = pd.concat(all_dfs, ignore_index=True)
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_xlsx:
+            excel_path = tmp_xlsx.name
+
+        with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+            if metadata_lines:
+                meta_df = pd.DataFrame({0: metadata_lines})
+                meta_df.to_excel(writer, sheet_name="Extracted", index=False, header=False)
+                start_row = len(metadata_lines) + 1
+            else:
+                start_row = 0
+            combined_df.to_excel(writer, sheet_name="Extracted", index=False, startrow=start_row)
+
+        # === Возвращаем Base64 Excel ===
+        with open(excel_path, "rb") as f:
+            excel_bytes = f.read()
+        excel_b64 = base64.b64encode(excel_bytes).decode("utf-8")
+
+        # Удаляем временные файлы
+        os.unlink(pdf_path)
+        os.unlink(excel_path)
+
+        return JSONResponse({
+            "status": "ok",
+            "file_name": file.filename.replace(".pdf", ".xlsx"),
+            "tables_extracted": len(tables),
+            "excel_base64": excel_b64
+        })
+
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
