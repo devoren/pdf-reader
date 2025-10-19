@@ -7,6 +7,7 @@ import PyPDF2
 import shutil
 import os
 import base64
+import gc
 
 def parse_pages_param(pages_str, total_pages):
     if pages_str:
@@ -85,41 +86,54 @@ async def extract_text(
 async def convert_to_excel(file: UploadFile = File(...)):
     """
     Конвертирует PDF в Excel (.xlsx) с помощью Camelot.
-    Возвращает JSON с Excel в base64 (удобно для n8n).
+    Возвращает JSON с путем к Excel и количеством извлечённых таблиц.
+    Обрабатывает PDF постранично, объединяя таблицы, чтобы оптимизировать память.
     """
+    import pandas as pd
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
             tmp_pdf.write(await file.read())
             pdf_path = tmp_pdf.name
 
+        # Получаем общее количество страниц
+        with pdfplumber.open(pdf_path) as pdf:
+            total_pages = len(pdf.pages)
+
+        all_dfs = []
+        total_tables = 0
+
+        # Обрабатываем по одной странице за раз
+        for page_num in range(1, total_pages + 1):
+            # Извлекаем таблицы с текущей страницы
+            tables = camelot.read_pdf(pdf_path, flavor="lattice", pages=str(page_num))
+            if tables:
+                total_tables += len(tables)
+                for idx, table in enumerate(tables):
+                    df = table.df
+                    if len(all_dfs) == 0:
+                        all_dfs.append(df)
+                    else:
+                        # Пропускаем строки заголовков для последующих таблиц
+                        all_dfs.append(df.iloc[1:].reset_index(drop=True))
+            # Очищаем память после обработки страницы
+            gc.collect()
+
+        if not all_dfs:
+            os.unlink(pdf_path)
+            return JSONResponse({"status": "error", "message": "No tables found."}, status_code=400)
+
+        combined_df = pd.concat(all_dfs, ignore_index=True)
+
         # === Извлекаем метаданные (до первой строки с заголовками) ===
         metadata_lines = []
         header_keywords = ["КНП", "Дебет", "Кредит", "Назначение", "БИК", "Номер документа"]
         with pdfplumber.open(pdf_path) as pdf:
-            if len(pdf.pages) > 0:
+            if total_pages > 0:
                 lines = (pdf.pages[0].extract_text() or "").splitlines()
                 for line in lines:
                     if any(key in line for key in header_keywords):
                         break
                     metadata_lines.append(line)
-
-        # === Camelot extraction ===
-        tables = camelot.read_pdf(pdf_path, flavor="lattice", pages="all")
-
-        if not tables or len(tables) == 0:
-            os.unlink(pdf_path)
-            return JSONResponse({"status": "error", "message": "No tables found."}, status_code=400)
-
-        import pandas as pd
-        all_dfs = []
-        for idx, table in enumerate(tables):
-            df = table.df
-            if idx == 0:
-                all_dfs.append(df)
-            else:
-                # Пропускаем строки заголовков для последующих таблиц
-                all_dfs.append(df.iloc[1:].reset_index(drop=True))
-        combined_df = pd.concat(all_dfs, ignore_index=True)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_xlsx:
             excel_path = tmp_xlsx.name
@@ -133,10 +147,10 @@ async def convert_to_excel(file: UploadFile = File(...)):
                 start_row = 0
             combined_df.to_excel(writer, sheet_name="Extracted", index=False, startrow=start_row)
 
-        # === Возвращаем Base64 Excel ===
-        with open(excel_path, "rb") as f:
-            excel_bytes = f.read()
-        excel_b64 = base64.b64encode(excel_bytes).decode("utf-8")
+        # Кодируем Excel файл в base64
+        with open(excel_path, "rb") as f_excel:
+            excel_bytes = f_excel.read()
+            excel_base64 = base64.b64encode(excel_bytes).decode("utf-8")
 
         # Удаляем временные файлы
         os.unlink(pdf_path)
@@ -145,8 +159,8 @@ async def convert_to_excel(file: UploadFile = File(...)):
         return JSONResponse({
             "status": "ok",
             "file_name": file.filename.replace(".pdf", ".xlsx"),
-            "tables_extracted": len(tables),
-            "excel_base64": excel_b64
+            "tables_extracted": total_tables,
+            "excel_base64": excel_base64
         })
 
     except Exception as e:
