@@ -95,8 +95,26 @@ async def extract_text(
             # Используем camelot для извлечения таблиц
             tables = camelot.read_pdf(tmp_path, flavor="stream", pages=pages_str)
             if tables:
-                for table in tables:
-                    csv_text = clean_camelot_csv(table.df.to_csv(index=False))
+                import pandas as pd
+                header_row = None  # Для хранения заголовков таблицы
+                for idx, table in enumerate(tables):
+                    df = table.df.copy()
+                    flat_text = " ".join(df.astype(str).values.flatten()).lower()
+
+                    # 📄 Если первая таблица содержит служебную шапку — запоминаем её, но не добавляем в результат
+                    if idx == 0 and any(k in flat_text for k in ["выписка", "остаток", "владелец", "счет №"]):
+                        header_row = df.iloc[-1].tolist() if len(df) > 1 else df.iloc[0].tolist()
+                        continue
+
+                    # 🧩 Добавляем заголовок, если он отсутствует
+                    if header_row is not None and list(df.iloc[0]) != header_row:
+                        n_cols = df.shape[1]
+                        hdr = header_row[:n_cols] if len(header_row) > n_cols else header_row + [''] * (n_cols - len(header_row))
+                        import pandas as pd
+                        header_df = pd.DataFrame([hdr], columns=df.columns)
+                        df = pd.concat([header_df, df], ignore_index=True)
+
+                    csv_text = clean_camelot_csv(df.to_csv(index=False))
                     result_text.append(f"=== Страница {table.page} ===\n{csv_text}")
                 unique_pages = {t.page for t in tables}
                 pages_processed = len(unique_pages)
