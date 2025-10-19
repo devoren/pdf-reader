@@ -1,4 +1,9 @@
 fastapi
 uvicorn
 pdfplumber
+camelot-py[cv]
 python-multipart
+pandas
+numpy
+opencv-python
+PyPDF2
