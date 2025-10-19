@@ -138,13 +138,29 @@ async def convert_to_excel(file: UploadFile = File(...)):
             excel_path = tmp_xlsx.name
 
         with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+            # Добавляем одну пустую строку перед метаданными
+            empty_meta = pd.DataFrame([[""]])
+            empty_meta.to_excel(writer, sheet_name="Extracted", index=False, header=False, startrow=0)
+
             if metadata_lines:
                 meta_df = pd.DataFrame({0: metadata_lines})
-                meta_df.to_excel(writer, sheet_name="Extracted", index=False, header=False)
-                start_row = len(metadata_lines) + 1
+                # метаданные начинаются со второй строки (после пустой)
+                meta_df.to_excel(writer, sheet_name="Extracted", index=False, header=False, startrow=1)
+                start_row = len(metadata_lines) + 2  # метаданные + пустая строка
             else:
-                start_row = 0
-            combined_df.to_excel(writer, sheet_name="Extracted", index=False, startrow=start_row)
+                start_row = 2  # если нет метаданных, таблица начнётся со 2 строки
+
+            # Добавляем пустую строку перед таблицей
+            empty_row = pd.DataFrame([[""] * combined_df.shape[1]], columns=combined_df.columns)
+            combined_df_with_empty = pd.concat([empty_row, combined_df], ignore_index=True)
+
+            combined_df_with_empty.to_excel(
+                writer,
+                sheet_name="Extracted",
+                index=False,
+                header=False,
+                startrow=start_row
+            )
 
         # Кодируем Excel файл в base64
         with open(excel_path, "rb") as f_excel:
