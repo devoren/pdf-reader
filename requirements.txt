@@ -5,5 +5,3 @@ camelot-py[cv]
 python-multipart
 pandas
 numpy
-opencv-python
-PyPDF2

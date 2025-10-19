@@ -3,7 +3,6 @@ from fastapi.responses import JSONResponse
 import pdfplumber
 import tempfile
 import camelot
-import PyPDF2
 import shutil
 import os
 import base64
