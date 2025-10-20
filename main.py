@@ -112,8 +112,13 @@ async def convert_to_excel(file: UploadFile = File(...)):
                     if len(all_dfs) == 0:
                         all_dfs.append(df)
                     else:
-                        # Пропускаем строки заголовков для последующих таблиц
-                        all_dfs.append(df.iloc[1:].reset_index(drop=True))
+                        # Проверяем, является ли первая строка заголовком, если да, пропускаем её
+                        first_row = df.iloc[0].tolist()
+                        header_keywords = ["КНП", "Дебет", "Кредит", "Назначение", "БИК", "Номер документа"]
+                        if any(any(key in str(cell) for key in header_keywords) for cell in first_row):
+                            all_dfs.append(df.iloc[1:].reset_index(drop=True))
+                        else:
+                            all_dfs.append(df.reset_index(drop=True))
             # Очищаем память после обработки страницы
             gc.collect()
 
@@ -125,10 +130,10 @@ async def convert_to_excel(file: UploadFile = File(...)):
 
         # === Извлекаем метаданные (до первой строки с заголовками) ===
         metadata_lines = []
-        header_keywords = ["КНП", "Дебет", "Кредит", "Назначение", "БИК", "Номер документа"]
         with pdfplumber.open(pdf_path) as pdf:
             if total_pages > 0:
                 lines = (pdf.pages[0].extract_text() or "").splitlines()
+                header_keywords = ["КНП", "Дебет", "Кредит", "Назначение", "БИК", "Номер документа"]
                 for line in lines:
                     if any(key in line for key in header_keywords):
                         break
@@ -150,8 +155,8 @@ async def convert_to_excel(file: UploadFile = File(...)):
             else:
                 start_row = 2  # если нет метаданных, таблица начнётся со 2 строки
 
-            # Добавляем пустую строку перед таблицей
-            empty_row = pd.DataFrame([[0] + [""] * (combined_df.shape[1] - 1)], columns=combined_df.columns)
+            # Добавляем пустую строку перед таблицей с 0 в первой ячейке
+            empty_row = pd.DataFrame([[""] * combined_df.shape[1]], columns=combined_df.columns)
             combined_df_with_empty = pd.concat([empty_row, combined_df], ignore_index=True)
 
             combined_df_with_empty.to_excel(
