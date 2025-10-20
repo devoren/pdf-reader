@@ -151,7 +151,7 @@ async def convert_to_excel(file: UploadFile = File(...)):
                 start_row = 2  # если нет метаданных, таблица начнётся со 2 строки
 
             # Добавляем пустую строку перед таблицей
-            empty_row = pd.DataFrame([[""] * combined_df.shape[1]], columns=combined_df.columns)
+            empty_row = pd.DataFrame([[0] + [""] * (combined_df.shape[1] - 1)], columns=combined_df.columns)
             combined_df_with_empty = pd.concat([empty_row, combined_df], ignore_index=True)
 
             combined_df_with_empty.to_excel(
